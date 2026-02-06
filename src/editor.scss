@@ -1,0 +1,10 @@
+/* Editor specific adjustments */
+.wp-block-floyd-prism-block-prism-canvas {
+    margin-top: 20px;
+    margin-bottom: 20px;
+
+    .floyd-prism-container {
+        // Ensure canvas takes space in the editor
+        min-height: 500px;
+    }
+}

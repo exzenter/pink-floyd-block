@@ -1,0 +1,125 @@
+{
+    "$schema": "https://schemas.wp.org/trunk/block.json",
+    "apiVersion": 2,
+    "name": "pinkfloyd-block/prism-canvas",
+    "version": "1.0.0",
+    "title": "Pink Floyd Prism Canvas",
+    "category": "media",
+    "icon": "art",
+    "description": "Interactive light refraction canvas block.",
+    "supports": {
+        "html": false,
+        "anchor": true,
+        "align": [
+            "wide",
+            "full"
+        ]
+    },
+    "attributes": {
+        "prismSize": {
+            "type": "number",
+            "default": 200
+        },
+        "prismX": {
+            "type": "number",
+            "default": 50
+        },
+        "prismY": {
+            "type": "number",
+            "default": 50
+        },
+        "fadeBorder": {
+            "type": "number",
+            "default": 25
+        },
+        "grain": {
+            "type": "number",
+            "default": 0.15
+        },
+        "refractionIndex": {
+            "type": "number",
+            "default": 1.44
+        },
+        "dispersion": {
+            "type": "number",
+            "default": 0.11
+        },
+        "rainbowAngle": {
+            "type": "number",
+            "default": 48
+        },
+        "beamWidth": {
+            "type": "number",
+            "default": 13
+        },
+        "beamExitMinY": {
+            "type": "number",
+            "default": 0
+        },
+        "beamExitMaxY": {
+            "type": "number",
+            "default": 100
+        },
+        "beamEntryMinY": {
+            "type": "number",
+            "default": 0
+        },
+        "beamEntryMaxY": {
+            "type": "number",
+            "default": 100
+        },
+        "innerBeamAngle": {
+            "type": "number",
+            "default": -78
+        },
+        "bandCount": {
+            "type": "number",
+            "default": 7
+        },
+        "rainbowSpread": {
+            "type": "number",
+            "default": 2.0
+        },
+        "dampingEnabled": {
+            "type": "boolean",
+            "default": true
+        },
+        "dampingFactor": {
+            "type": "number",
+            "default": 0.30
+        },
+        "boxedMode": {
+            "type": "boolean",
+            "default": false
+        },
+        "boxWidth": {
+            "type": "number",
+            "default": 900
+        },
+        "boxHeight": {
+            "type": "number",
+            "default": 600
+        },
+        "targetFPS": {
+            "type": "number",
+            "default": 60
+        },
+        "antiAliasing": {
+            "type": "boolean",
+            "default": true
+        },
+        "showFPS": {
+            "type": "boolean",
+            "default": false
+        },
+        "domRainbowShapes": {
+            "type": "boolean",
+            "default": false
+        }
+    },
+    "textdomain": "pinkfloyd-block",
+    "editorScript": "file:./index.js",
+    "editorStyle": "file:./index.css",
+    "style": "file:./style-index.css",
+    "viewScript": "file:./view.js"
+}
