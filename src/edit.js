@@ -69,7 +69,9 @@ export default function Edit({ attributes, setAttributes }) {
 
     useEffect(() => {
         if (canvasRef.current && !prismInstance.current) {
-            prismInstance.current = new PrismCanvas(canvasRef.current, attributes);
+            // Disable DOM rainbow shapes in editor preview
+            const editorConfig = { ...attributes, domRainbowShapes: false };
+            prismInstance.current = new PrismCanvas(canvasRef.current, editorConfig);
         }
         return () => {
             if (prismInstance.current) {
@@ -81,7 +83,9 @@ export default function Edit({ attributes, setAttributes }) {
 
     useEffect(() => {
         if (prismInstance.current) {
-            prismInstance.current.updateConfig(attributes);
+            // Disable DOM rainbow shapes in editor preview
+            const editorConfig = { ...attributes, domRainbowShapes: false };
+            prismInstance.current.updateConfig(editorConfig);
         }
     }, [attributes]);
 

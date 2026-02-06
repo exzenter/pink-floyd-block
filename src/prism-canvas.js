@@ -443,6 +443,12 @@ export default class PrismCanvas {
                 this.setupCanvas();
             }
         }, 100));
+
+        // Mark canvas rect dirty on scroll for accurate DOM rainbow positioning
+        window.addEventListener('scroll', () => {
+            this.canvasRectDirty = true;
+            this.needsRedraw = true; // Force render to update DOM shapes
+        }, { passive: true });
     }
 
     // #7: Throttled mouse position update (max 60fps)
@@ -1026,12 +1032,8 @@ export default class PrismCanvas {
             this.bandStateCache.length = bandCount;
         }
 
-        // #12: Use cached canvas rect (update on resize)
-        if (this.canvasRectDirty || !this.cachedCanvasRect) {
-            this.cachedCanvasRect = this.canvas.getBoundingClientRect();
-            this.canvasRectDirty = false;
-        }
-        const canvasRect = this.cachedCanvasRect;
+        // Always get fresh canvas rect for DOM shapes (scroll changes viewport position)
+        const canvasRect = this.canvas.getBoundingClientRect();
         const bounds = this.getClippedExitBounds(beamPath);
         const bandEdges = this._computeBandEdges(bandCount, hoverActive ? this.hoveredBandIndex : -1);
 
