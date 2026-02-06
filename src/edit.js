@@ -9,8 +9,9 @@ import {
     ColorPicker
 } from '@wordpress/components';
 import { __ } from '@wordpress/i18n';
-import { useEffect, useRef } from '@wordpress/element';
+import { useEffect, useRef, useState } from '@wordpress/element';
 import PrismCanvas from './prism-canvas';
+import BandLabelModal from './band-label-modal';
 
 const ColorSetting = ({ label, color, onChange }) => (
     <Dropdown
@@ -49,6 +50,7 @@ export default function Edit({ attributes, setAttributes }) {
     const blockProps = useBlockProps();
     const canvasRef = useRef(null);
     const prismInstance = useRef(null);
+    const [isLabelModalOpen, setIsLabelModalOpen] = useState(false);
 
     const {
         prismSize, prismX, prismY, fadeBorder, grain,
@@ -61,7 +63,8 @@ export default function Edit({ attributes, setAttributes }) {
         minCanvasSize, boxBorderRadius, boxShadowEnabled,
         targetFPS, antiAliasing, showFPS,
         domRainbowShapes, hideCanvasRainbow, domRainbowOpacity,
-        prismColor, prismBorderColor, grainColor, bgColor, beamColor
+        prismColor, prismBorderColor, grainColor, bgColor, beamColor,
+        hoverExpandEnabled, bandLabels
     } = attributes;
 
     useEffect(() => {
@@ -93,6 +96,8 @@ export default function Edit({ attributes, setAttributes }) {
             boxWidth: 900, boxWidthUnit: 'px', boxHeight: 600, boxHeightUnit: 'px',
             targetFPS: 60, antiAliasing: true, showFPS: false,
             domRainbowShapes: false,
+            hoverExpandEnabled: false,
+            bandLabels: [],
             prismColor: 'rgba(25, 25, 35, 0.95)',
             prismBorderColor: 'rgba(255, 255, 255, 0.08)',
             grainColor: '#ffffff',
@@ -127,6 +132,19 @@ export default function Edit({ attributes, setAttributes }) {
                 <PanelBody title={__('Rainbow Settings', 'pinkfloyd-block')} initialOpen={false}>
                     <RangeControl label={__('Band Count', 'pinkfloyd-block')} value={bandCount} onChange={(v) => setAttributes({ bandCount: v })} min={3} max={12} />
                     <RangeControl label={__('Rainbow Spread', 'pinkfloyd-block')} value={rainbowSpread} onChange={(v) => setAttributes({ rainbowSpread: v })} min={1} max={5} step={0.1} />
+                    <ToggleControl
+                        label={__('Hover Expand', 'pinkfloyd-block')}
+                        checked={hoverExpandEnabled}
+                        onChange={(v) => setAttributes({ hoverExpandEnabled: v })}
+                        help={__('Bands expand on hover (right edge exit only)', 'pinkfloyd-block')}
+                    />
+                    <Button
+                        variant="secondary"
+                        onClick={() => setIsLabelModalOpen(true)}
+                        style={{ width: '100%', justifyContent: 'center', marginTop: '8px' }}
+                    >
+                        {__('Edit Band Labels', 'pinkfloyd-block')}
+                    </Button>
                 </PanelBody>
 
                 <PanelBody title={__('Color Settings', 'pinkfloyd-block')} initialOpen={false}>
@@ -296,6 +314,13 @@ export default function Edit({ attributes, setAttributes }) {
                 </div>
                 {showFPS && <div className="fps-counter visible">{prismInstance.current?.fpsCounter.fps || 0} FPS</div>}
             </div>
+            <BandLabelModal
+                isOpen={isLabelModalOpen}
+                onClose={() => setIsLabelModalOpen(false)}
+                bandCount={bandCount}
+                bandLabels={bandLabels || []}
+                onSave={(labels) => setAttributes({ bandLabels: labels })}
+            />
         </div>
     );
 }

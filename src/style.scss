@@ -95,6 +95,32 @@
             left: 0;
             pointer-events: none;
             will-change: clip-path;
+
+            // CSS custom properties are set by JavaScript
+            // and applied as inline styles
+
+            &.is-hovering {
+                transition: clip-path 0.3s ease;
+            }
         }
+    }
+}
+
+// Band labels on DOM rainbow shapes
+.band-label {
+    position: absolute;
+    pointer-events: auto;
+    white-space: nowrap;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    text-decoration: none;
+    letter-spacing: 0.05em;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+    transition: opacity 0.3s ease;
+
+    &:hover {
+        text-decoration: underline;
+        opacity: 0.85;
     }
 }

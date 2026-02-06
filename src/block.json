@@ -191,6 +191,14 @@
         "beamColor": {
             "type": "string",
             "default": "#ffffff"
+        },
+        "hoverExpandEnabled": {
+            "type": "boolean",
+            "default": false
+        },
+        "bandLabels": {
+            "type": "array",
+            "default": []
         }
     },
     "textdomain": "pinkfloyd-block",
