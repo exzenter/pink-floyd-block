@@ -1,0 +1,52 @@
+/* Editor specific adjustments */
+.wp-block-pinkfloyd-block-prism-canvas {
+    margin-top: 20px;
+    margin-bottom: 20px;
+
+    .floyd-prism-container {
+        // Ensure canvas takes space in the editor
+        min-height: 500px;
+
+        // Make sure InnerBlocks wrapper also uses the grid area
+        .floyd-prism-inner-content {
+            // Take out of grid flow so editor wrappers can't expand the container
+            position: absolute;
+            inset: 0;
+
+            // In editor, allow pointer events for editing
+            pointer-events: auto;
+
+            &>*,
+            * {
+                pointer-events: auto;
+                cursor: auto;
+            }
+
+            // WordPress editor wrapper divs - use display: contents to pass through styles
+            .block-editor-inner-blocks,
+            .block-editor-block-list__layout {
+   display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    height: 100%;            }
+
+            // Ensure typography presets are properly applied
+            // p,
+            // h1,
+            // h2,
+            // h3,
+            // h4,
+            // h5,
+            // h6,
+            // span {
+            //     font-size: inherit !important;
+            // }
+
+            // Block appender button
+            .block-list-appender {
+                pointer-events: auto;
+            }
+        }
+    }
+}

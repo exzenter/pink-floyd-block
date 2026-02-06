@@ -1,0 +1,20 @@
+# Connectivity & Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# WordPress Build Artifacts
+build/
+*.build.js
+*.min.js
+*.min.css
+
+# System Files
+.DS_Store
+Thumbs.db
+
+# OS Generated Files
+.vscode/
+.idea/
+*.log
