@@ -1,5 +1,7 @@
 # Pink Floyd Prism Block
 
+[https://exzent.de](https://exzent.de)
+
 Calculate the dark side of your DOM. A WordPress block that simulates light refraction through a prism using the HTML5 Canvas API, featuring interactive physics and "Pink Floyd" style aesthetics.
 
 ## Features

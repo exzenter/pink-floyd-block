@@ -3,7 +3,9 @@
  * Plugin Name:       Pink Floyd Block
  * Description:       An interactive prism light refraction block inspired by Pink Floyd.
  * Version:           1.0.0
- * Author:            Antigravity
+ * Plugin URI:        https://exzent.de/plugins/
+ * Author:            EXZENT
+ * Author URI:        https://exzent.de
  * License:           GPL-2.0-or-later
  * Text Domain:       pinkfloyd-block
  *
