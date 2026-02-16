@@ -1,8 +1,8 @@
 {
     "$schema": "https://schemas.wp.org/trunk/block.json",
-    "apiVersion": 2,
+    "apiVersion": 3,
     "name": "pinkfloyd-block/prism-canvas",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "title": "Pink Floyd Prism Canvas",
     "category": "media",
     "icon": "art",
@@ -13,7 +13,27 @@
         "align": [
             "wide",
             "full"
-        ]
+        ],
+        "spacing": {
+            "padding": true,
+            "margin": true,
+            "blockGap": true
+        },
+        "color": {
+            "background": true,
+            "text": true,
+            "gradients": true
+        },
+        "typography": {
+            "fontSize": true,
+            "lineHeight": true
+        },
+        "layout": {
+            "allowSizingOnChildren": true
+        }
+    },
+    "providesContext": {
+        "pinkfloyd-block/isInner": true
     },
     "attributes": {
         "prismSize": {
@@ -92,13 +112,41 @@
             "type": "boolean",
             "default": false
         },
+        "aspectRatioEnabled": {
+            "type": "boolean",
+            "default": false
+        },
+        "aspectRatio": {
+            "type": "string",
+            "default": "16:9"
+        },
         "boxWidth": {
             "type": "number",
             "default": 900
         },
+        "boxWidthUnit": {
+            "type": "string",
+            "default": "px"
+        },
         "boxHeight": {
             "type": "number",
             "default": 600
+        },
+        "boxHeightUnit": {
+            "type": "string",
+            "default": "px"
+        },
+        "minCanvasSize": {
+            "type": "number",
+            "default": 100
+        },
+        "boxBorderRadius": {
+            "type": "number",
+            "default": 12
+        },
+        "boxShadowEnabled": {
+            "type": "boolean",
+            "default": true
         },
         "targetFPS": {
             "type": "number",
@@ -115,6 +163,42 @@
         "domRainbowShapes": {
             "type": "boolean",
             "default": false
+        },
+        "hideCanvasRainbow": {
+            "type": "boolean",
+            "default": false
+        },
+        "domRainbowOpacity": {
+            "type": "number",
+            "default": 1.0
+        },
+        "prismColor": {
+            "type": "string",
+            "default": "rgba(25, 25, 35, 0.95)"
+        },
+        "prismBorderColor": {
+            "type": "string",
+            "default": "rgba(255, 255, 255, 0.08)"
+        },
+        "grainColor": {
+            "type": "string",
+            "default": "#ffffff"
+        },
+        "bgColor": {
+            "type": "string",
+            "default": "#0a0a0c"
+        },
+        "beamColor": {
+            "type": "string",
+            "default": "#ffffff"
+        },
+        "hoverExpandEnabled": {
+            "type": "boolean",
+            "default": false
+        },
+        "bandLabels": {
+            "type": "array",
+            "default": []
         }
     },
     "textdomain": "pinkfloyd-block",

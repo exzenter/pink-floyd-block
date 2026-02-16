@@ -40,16 +40,80 @@ export default class PrismCanvas {
         // DOM rainbow container
         this.domRainbowContainer = null;
 
+        // Hover expand state
+        this.hoveredBandIndex = -1;
+        this._isMouseOverRainbow = false;
+        this._lastExitEdgeName = null;
+
+        // Performance: Cache band elements and states
+        this.bandElements = [];
+        this.bandStateCache = [];
+        this.pendingDOMUpdates = null;
+        this.isSchedulingUpdate = false;
+
+        // Hover state debouncing
+        this.hoverDebounceTimer = null;
+        this.pendingHoverIndex = -1;
+
+        // #7: Mouse movement throttling
+        this.lastMouseUpdateTime = 0;
+        this.mouseUpdateInterval = 16; // 16ms = ~60fps
+        this.pendingMouseUpdate = null;
+
+        // #8: Dirty region tracking for granular redraws
+        this.dirtyFlags = {
+            beam: true,
+            prism: true,
+            rainbow: true,
+            background: true
+        };
+
+        // #9: Pre-calculated geometry cache
+        this.geometryCache = {
+            prismNormals: null,
+            leftEdgeNormal: null,
+            rightEdgeNormal: null,
+            bottomEdgeNormal: null,
+            dirty: true
+        };
+
+        // #12: Cached canvas rect (update on resize)
+        this.cachedCanvasRect = null;
+        this.canvasRectDirty = true;
+
         this.init();
     }
 
+    parseColorToRGBA(color) {
+        if (!color) return { r: 255, g: 255, b: 255, a: 1 };
+        if (color.startsWith('#')) {
+            const hex = color.slice(1);
+            if (hex.length === 3) return { r: parseInt(hex[0] + hex[0], 16), g: parseInt(hex[1] + hex[1], 16), b: parseInt(hex[2] + hex[2], 16), a: 1 };
+            if (hex.length >= 6) return { r: parseInt(hex.slice(0, 2), 16), g: parseInt(hex.slice(2, 4), 16), b: parseInt(hex.slice(4, 6), 16), a: hex.length === 8 ? parseInt(hex.slice(6, 8), 16) / 255 : 1 };
+        }
+        const match = color.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+))?\s*\)/);
+        if (match) return { r: parseInt(match[1]), g: parseInt(match[2]), b: parseInt(match[3]), a: match[4] !== undefined ? parseFloat(match[4]) : 1 };
+        return { r: 255, g: 255, b: 255, a: 1 };
+    }
+
+    _cacheColors() {
+        this._colors = {
+            bg: this.cfg.bgColor || '#0a0a0c',
+            beam: this.parseColorToRGBA(this.cfg.beamColor || '#ffffff'),
+            prism: this.parseColorToRGBA(this.cfg.prismColor || 'rgba(25, 25, 35, 0.95)'),
+            prismBorder: this.cfg.prismBorderColor || 'rgba(255, 255, 255, 0.08)',
+            grain: this.parseColorToRGBA(this.cfg.grainColor || '#ffffff'),
+        };
+    }
+
     init() {
+        this._cacheColors();
         this.generateGrainPattern();
         this.setupCanvas();
         this.setupEventListeners();
 
-        // Get DOM rainbow container
-        this.domRainbowContainer = this.canvas.parentElement?.querySelector('.dom-rainbow-container');
+        // Create DOM rainbow container on body level for natural scrolling
+        this.setupDOMRainbowContainer();
 
         // Initial default beam position
         this.updateDefaultBeamOrigin();
@@ -61,15 +125,80 @@ export default class PrismCanvas {
         this.start();
     }
 
+    setupDOMRainbowContainer() {
+        // Remove any existing body-level container for this canvas
+        if (this.domRainbowContainer && this.domRainbowContainer.parentElement === document.body) {
+            this.domRainbowContainer.remove();
+        }
+
+        // Create new container on body level
+        this.domRainbowContainer = document.createElement('div');
+        this.domRainbowContainer.className = 'dom-rainbow-container-body';
+        this.domRainbowContainer.style.cssText = `
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 99999;
+            overflow: visible;
+        `;
+        document.body.appendChild(this.domRainbowContainer);
+
+        // Store reference for cleanup
+        this._canvasId = 'prism-canvas-' + Math.random().toString(36).substr(2, 9);
+        this.domRainbowContainer.setAttribute('data-canvas-id', this._canvasId);
+    }
+
     updateConfig(newConfig) {
         const oldBoxedMode = this.cfg.boxedMode;
         const oldAntiAliasing = this.cfg.antiAliasing;
         const oldFPS = this.cfg.targetFPS;
         const oldDomRainbow = this.cfg.domRainbowShapes;
+        const oldBoxWidth = this.cfg.boxWidth;
+        const oldBoxHeight = this.cfg.boxHeight;
+        const oldBoxWidthUnit = this.cfg.boxWidthUnit;
+        const oldBoxHeightUnit = this.cfg.boxHeightUnit;
+        const oldAspectRatioEnabled = this.cfg.aspectRatioEnabled;
+        const oldAspectRatio = this.cfg.aspectRatio;
+        const oldGrainColor = this.cfg.grainColor;
+        const oldBandCount = this.cfg.bandCount;
+        const oldBandLabels = this.cfg.bandLabels;
 
         this.cfg = { ...this.cfg, ...newConfig };
+        this._cacheColors();
 
-        if (this.cfg.boxedMode !== oldBoxedMode || this.cfg.antiAliasing !== oldAntiAliasing) {
+        if (this.cfg.grainColor !== oldGrainColor) {
+            this.generateGrainPattern();
+        }
+
+        // Reset hover state when band count changes
+        if (this.cfg.bandCount !== oldBandCount) {
+            this.hoveredBandIndex = -1;
+        }
+
+        // Force label recreation when bandLabels change
+        if (JSON.stringify(oldBandLabels) !== JSON.stringify(this.cfg.bandLabels)) {
+            if (this.domRainbowContainer) {
+                this.domRainbowContainer.querySelectorAll('.band-label').forEach(el => el.remove());
+            }
+            // Clear band state cache when labels change
+            this.bandStateCache = [];
+        }
+
+        // Check if canvas needs to be resized
+        const dimensionsChanged =
+            this.cfg.boxedMode !== oldBoxedMode ||
+            this.cfg.antiAliasing !== oldAntiAliasing ||
+            this.cfg.boxWidth !== oldBoxWidth ||
+            this.cfg.boxHeight !== oldBoxHeight ||
+            this.cfg.boxWidthUnit !== oldBoxWidthUnit ||
+            this.cfg.boxHeightUnit !== oldBoxHeightUnit ||
+            this.cfg.aspectRatioEnabled !== oldAspectRatioEnabled ||
+            this.cfg.aspectRatio !== oldAspectRatio;
+
+        if (dimensionsChanged) {
             this.setupCanvas();
         }
 
@@ -88,9 +217,28 @@ export default class PrismCanvas {
     }
 
     setupCanvas() {
+        const MAX_CANVAS_SIZE = 4000; // Prevent performance issues
+        const MIN_CANVAS_SIZE = this.cfg.minCanvasSize || 100;
+
         if (this.cfg.boxedMode) {
-            this.canvasWidth = this.cfg.boxWidth || 900;
-            this.canvasHeight = this.cfg.boxHeight || 600;
+            // Parse width with unit
+            this.canvasWidth = this.parseUnit(
+                this.cfg.boxWidth || 900,
+                this.cfg.boxWidthUnit || 'px',
+                'width'
+            );
+
+            // Calculate height based on aspect ratio or use specified height
+            if (this.cfg.aspectRatioEnabled) {
+                const ratio = this.parseAspectRatio(this.cfg.aspectRatio || '16:9');
+                this.canvasHeight = Math.round(this.canvasWidth / ratio);
+            } else {
+                this.canvasHeight = this.parseUnit(
+                    this.cfg.boxHeight || 600,
+                    this.cfg.boxHeightUnit || 'px',
+                    'height'
+                );
+            }
         } else {
             // In a block context, we might want to use the parent's width
             // For now, we'll use window dimensions or a fallback
@@ -98,6 +246,10 @@ export default class PrismCanvas {
             this.canvasWidth = rect?.width || window.innerWidth;
             this.canvasHeight = rect?.height || window.innerHeight;
         }
+
+        // Apply sanity limits to prevent crashes
+        this.canvasWidth = Math.max(MIN_CANVAS_SIZE, Math.min(MAX_CANVAS_SIZE, this.canvasWidth || 900));
+        this.canvasHeight = Math.max(MIN_CANVAS_SIZE, Math.min(MAX_CANVAS_SIZE, this.canvasHeight || 600));
 
         const dpr = this.cfg.antiAliasing ? Math.min(window.devicePixelRatio || 1, 2) : 1;
         this.canvas.width = this.canvasWidth * dpr;
@@ -108,10 +260,50 @@ export default class PrismCanvas {
         this.ctx.scale(dpr, dpr);
 
         this.prismCache.dirty = true;
+        this.geometryCache.dirty = true; // Mark geometry for recalculation
+        this.canvasRectDirty = true; // Mark canvas rect for recalculation
         this.updatePrismGeometry();
         this.updateDefaultBeamOrigin();
         this.clearDOMRainbowShapes();
+        this.bandStateCache = []; // Clear cache on canvas resize
+        this.setAllDirty(); // Mark all regions for redraw
         this.needsRedraw = true;
+    }
+
+    parseUnit(value, unit, dimension) {
+        const numValue = parseFloat(value) || 0;
+
+        switch (unit) {
+            case 'px':
+                return numValue;
+            case 'rem':
+                // Get root font size (default 16px)
+                const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+                return numValue * rootFontSize;
+            case 'vw':
+                return (numValue / 100) * window.innerWidth;
+            case 'vh':
+                return (numValue / 100) * window.innerHeight;
+            case '%':
+                const parentRect = this.canvas.parentElement?.getBoundingClientRect();
+                if (dimension === 'width') {
+                    return (numValue / 100) * (parentRect?.width || window.innerWidth);
+                } else {
+                    return (numValue / 100) * (parentRect?.height || window.innerHeight);
+                }
+            default:
+                return numValue;
+        }
+    }
+
+    parseAspectRatio(ratioString) {
+        const parts = ratioString.split(':');
+        if (parts.length === 2) {
+            const width = parseFloat(parts[0]) || 16;
+            const height = parseFloat(parts[1]) || 9;
+            return width / height;
+        }
+        return 16 / 9; // Default fallback
     }
 
     updatePrismGeometry() {
@@ -136,6 +328,50 @@ export default class PrismCanvas {
         };
 
         this.prismCache.dirty = false;
+
+        // #9: Pre-calculate edge normals (expensive operation, do once)
+        this.precalculateGeometry();
+        this.dirtyFlags.prism = true;
+    }
+
+    // #9: Pre-calculate static geometry (normals, edges)
+    precalculateGeometry() {
+        if (!this.geometryCache.dirty) return;
+
+        const vertices = this.prismCache.vertices;
+        if (vertices.length < 3) return;
+
+        // Pre-calculate left edge normal
+        const leftEdgeDir = this.normalize({
+            x: vertices[1].x - vertices[0].x,
+            y: vertices[1].y - vertices[0].y
+        });
+        let leftNormal = { x: -leftEdgeDir.y, y: leftEdgeDir.x };
+        const toInside = {
+            x: this.prismCache.center.x - this.prismCache.leftEdge.start.x,
+            y: this.prismCache.center.y - this.prismCache.leftEdge.start.y
+        };
+        if (this.dot(leftNormal, toInside) < 0) {
+            leftNormal.x = -leftNormal.x;
+            leftNormal.y = -leftNormal.y;
+        }
+        this.geometryCache.leftEdgeNormal = leftNormal;
+
+        // Pre-calculate right edge normal
+        const rightEdgeDir = this.normalize({
+            x: vertices[2].x - vertices[0].x,
+            y: vertices[2].y - vertices[0].y
+        });
+        this.geometryCache.rightEdgeNormal = { x: -rightEdgeDir.y, y: rightEdgeDir.x };
+
+        // Pre-calculate bottom edge normal
+        const bottomEdgeDir = this.normalize({
+            x: vertices[2].x - vertices[1].x,
+            y: vertices[2].y - vertices[1].y
+        });
+        this.geometryCache.bottomEdgeNormal = { x: -bottomEdgeDir.y, y: bottomEdgeDir.x };
+
+        this.geometryCache.dirty = false;
     }
 
     updateDefaultBeamOrigin() {
@@ -149,17 +385,21 @@ export default class PrismCanvas {
         const size = 256;
         this.grainCanvas.width = size;
         this.grainCanvas.height = size;
+        const gc = this._colors ? this._colors.grain : { r: 255, g: 255, b: 255, a: 1 };
         const imageData = this.grainCtx.createImageData(size, size);
         const data = imageData.data;
         for (let i = 0; i < data.length; i += 4) {
-            const noise = Math.random() * 255;
-            data[i] = data[i + 1] = data[i + 2] = noise;
+            const noise = Math.random();
+            data[i] = Math.round(gc.r * noise);
+            data[i + 1] = Math.round(gc.g * noise);
+            data[i + 2] = Math.round(gc.b * noise);
             data[i + 3] = 255;
         }
         this.grainCtx.putImageData(imageData, 0, 0);
     }
 
     setupEventListeners() {
+        // #7: Throttled mouse movement handler
         const handleMove = (e) => {
             const rect = this.canvas.getBoundingClientRect();
             let x, y;
@@ -170,20 +410,68 @@ export default class PrismCanvas {
                 x = e.clientX - rect.left;
                 y = e.clientY - rect.top;
             }
-            this.updateMousePosition(x, y);
+            this.throttledUpdateMousePosition(x, y);
         };
 
         this.canvas.addEventListener('mousemove', handleMove);
         this.canvas.addEventListener('touchmove', handleMove, { passive: true });
 
-        this.canvas.addEventListener('mouseenter', () => { this.mouse.isOnCanvas = true; this.needsRedraw = true; });
-        this.canvas.addEventListener('mouseleave', () => { this.mouse.isOnCanvas = false; this.needsRedraw = true; });
-        this.canvas.addEventListener('touchstart', () => { this.mouse.isOnCanvas = true; this.needsRedraw = true; });
-        this.canvas.addEventListener('touchend', () => { this.mouse.isOnCanvas = false; this.needsRedraw = true; });
+        this.canvas.addEventListener('mouseenter', () => {
+            this.mouse.isOnCanvas = true;
+            this.dirtyFlags.beam = true;
+            this.needsRedraw = true;
+        });
+        this.canvas.addEventListener('mouseleave', () => {
+            this.mouse.isOnCanvas = false;
+            this.dirtyFlags.beam = true;
+            this.needsRedraw = true;
+        });
+        this.canvas.addEventListener('touchstart', () => {
+            this.mouse.isOnCanvas = true;
+            this.dirtyFlags.beam = true;
+            this.needsRedraw = true;
+        });
+        this.canvas.addEventListener('touchend', () => {
+            this.mouse.isOnCanvas = false;
+            this.dirtyFlags.beam = true;
+            this.needsRedraw = true;
+        });
 
         window.addEventListener('resize', this.debounce(() => {
-            if (!this.cfg.boxedMode) this.setupCanvas();
+            if (!this.cfg.boxedMode) {
+                this.canvasRectDirty = true; // Mark canvas rect for update
+                this.setupCanvas();
+            }
         }, 100));
+
+        // Mark canvas rect dirty on scroll for accurate DOM rainbow positioning
+        window.addEventListener('scroll', () => {
+            this.canvasRectDirty = true;
+            this.needsRedraw = true; // Force render to update DOM shapes
+        }, { passive: true });
+    }
+
+    // #7: Throttled mouse position update (max 60fps)
+    throttledUpdateMousePosition(x, y) {
+        const now = performance.now();
+        const timeSinceLastUpdate = now - this.lastMouseUpdateTime;
+
+        if (timeSinceLastUpdate >= this.mouseUpdateInterval) {
+            // Immediate update
+            this.updateMousePosition(x, y);
+            this.lastMouseUpdateTime = now;
+        } else {
+            // Schedule update for next interval
+            if (this.pendingMouseUpdate) {
+                clearTimeout(this.pendingMouseUpdate);
+            }
+            const delay = this.mouseUpdateInterval - timeSinceLastUpdate;
+            this.pendingMouseUpdate = setTimeout(() => {
+                this.updateMousePosition(x, y);
+                this.lastMouseUpdateTime = performance.now();
+                this.pendingMouseUpdate = null;
+            }, delay);
+        }
     }
 
     updateMousePosition(x, y) {
@@ -195,6 +483,9 @@ export default class PrismCanvas {
             this.mouse.targetX = this.defaultBeamOrigin.x;
             this.mouse.targetY = this.defaultBeamOrigin.y;
         }
+        // #8: Mark beam and rainbow as dirty (prism and background unchanged)
+        this.dirtyFlags.beam = true;
+        this.dirtyFlags.rainbow = true;
         this.needsRedraw = true;
     }
 
@@ -229,6 +520,11 @@ export default class PrismCanvas {
             cancelAnimationFrame(this.animationId);
             this.animationId = null;
         }
+        // Cleanup body-level container
+        if (this.domRainbowContainer && this.domRainbowContainer.parentElement === document.body) {
+            this.domRainbowContainer.remove();
+            this.domRainbowContainer = null;
+        }
     }
 
     updateDampedMouse() {
@@ -238,12 +534,18 @@ export default class PrismCanvas {
             if (Math.abs(dx) > 0.1 || Math.abs(dy) > 0.1) {
                 this.mouse.x += dx * this.cfg.dampingFactor;
                 this.mouse.y += dy * this.cfg.dampingFactor;
+                // #8: Mark beam and rainbow as dirty
+                this.dirtyFlags.beam = true;
+                this.dirtyFlags.rainbow = true;
                 this.needsRedraw = true;
             }
         } else {
             if (this.mouse.x !== this.mouse.targetX || this.mouse.y !== this.mouse.targetY) {
                 this.mouse.x = this.mouse.targetX;
                 this.mouse.y = this.mouse.targetY;
+                // #8: Mark beam and rainbow as dirty
+                this.dirtyFlags.beam = true;
+                this.dirtyFlags.rainbow = true;
                 this.needsRedraw = true;
             }
         }
@@ -258,22 +560,62 @@ export default class PrismCanvas {
         }
     }
 
+    // #8: Dirty region-aware rendering
     render() {
-        this.ctx.fillStyle = '#0a0a0c';
-        this.ctx.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
+        // Check if any canvas elements need redrawing
+        const needsCanvasRedraw = this.dirtyFlags.background || this.dirtyFlags.beam ||
+                                   this.dirtyFlags.prism || this.dirtyFlags.rainbow;
 
-        const beamPath = this.calculateBeamPath();
-        if (beamPath) {
-            this.drawIncomingBeam(beamPath);
-            this.drawInnerBeam(beamPath);
-            this.drawStylizedRainbow(beamPath);
-            this.updateDOMRainbowShapes(beamPath);
+        // If anything on canvas is dirty, redraw the whole canvas (elements overlap)
+        if (needsCanvasRedraw) {
+            // Clear background
+            this.ctx.fillStyle = this._colors.bg;
+            this.ctx.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
+
+            // Calculate beam path (needed for all components)
+            const beamPath = this.calculateBeamPath();
+
+            if (beamPath) {
+                // Draw beam
+                this.drawIncomingBeam(beamPath);
+                this.drawInnerBeam(beamPath);
+
+                // Draw rainbow if not hidden
+                if (!this.cfg.hideCanvasRainbow || !this.cfg.domRainbowShapes) {
+                    this.drawStylizedRainbow(beamPath);
+                }
+
+                // Update DOM shapes (has its own dirty checking)
+                this.updateDOMRainbowShapes(beamPath);
+            } else {
+                if (this.cfg.domRainbowShapes) {
+                    this.clearDOMRainbowShapes();
+                }
+            }
+
+            // Draw prism on top
+            this.drawPrism();
+
+            // Clear all dirty flags after redraw
+            this.dirtyFlags.background = false;
+            this.dirtyFlags.beam = false;
+            this.dirtyFlags.prism = false;
+            this.dirtyFlags.rainbow = false;
         } else {
-            if (this.cfg.domRainbowShapes) {
-                this.clearDOMRainbowShapes();
+            // Nothing dirty on canvas, but still update DOM shapes if needed
+            const beamPath = this.calculateBeamPath();
+            if (beamPath && this.cfg.domRainbowShapes) {
+                this.updateDOMRainbowShapes(beamPath);
             }
         }
-        this.drawPrism();
+    }
+
+    // #8: Helper to mark all regions as dirty
+    setAllDirty() {
+        this.dirtyFlags.beam = true;
+        this.dirtyFlags.prism = true;
+        this.dirtyFlags.rainbow = true;
+        this.dirtyFlags.background = true;
     }
 
     calculateBeamPath() {
@@ -297,12 +639,16 @@ export default class PrismCanvas {
         const entryTop = { x: entryPoint.x - edgeDir.x * beamHalfWidth, y: entryPoint.y - edgeDir.y * beamHalfWidth };
         const entryBottom = { x: entryPoint.x + edgeDir.x * beamHalfWidth, y: entryPoint.y + edgeDir.y * beamHalfWidth };
 
-        const leftNormal = this.normalize({ x: -edgeDir.y, y: edgeDir.x });
-        const toInside = { x: this.prismCache.center.x - entryPoint.x, y: this.prismCache.center.y - entryPoint.y };
-        if (this.dot(leftNormal, toInside) < 0) {
-            leftNormal.x = -leftNormal.x;
-            leftNormal.y = -leftNormal.y;
-        }
+        // #9: Use pre-calculated left edge normal (fallback to calculated if not available)
+        const leftNormal = this.geometryCache.leftEdgeNormal || (() => {
+            const normal = this.normalize({ x: -edgeDir.y, y: edgeDir.x });
+            const toInside = { x: this.prismCache.center.x - entryPoint.x, y: this.prismCache.center.y - entryPoint.y };
+            if (this.dot(normal, toInside) < 0) {
+                normal.x = -normal.x;
+                normal.y = -normal.y;
+            }
+            return normal;
+        })();
 
         const beamDir = this.normalize({ x: entryPoint.x - beamOrigin.x, y: entryPoint.y - beamOrigin.y });
         const incidentDir = beamDir;
@@ -323,15 +669,18 @@ export default class PrismCanvas {
         const bottomEdge = { p1: vertices[1], p2: vertices[2] };
 
         let exitEdge = rightEdge;
+        let exitEdgeName = 'right';
         let exitPoint = this.lineIntersection(entryPoint, { x: entryPoint.x + refractedDir.x * 2000, y: entryPoint.y + refractedDir.y * 2000 }, rightEdge.p1, rightEdge.p2);
 
         if (!exitPoint) {
             exitEdge = bottomEdge;
+            exitEdgeName = 'bottom';
             exitPoint = this.lineIntersection(entryPoint, { x: entryPoint.x + refractedDir.x * 2000, y: entryPoint.y + refractedDir.y * 2000 }, bottomEdge.p1, bottomEdge.p2);
         }
 
         if (!exitPoint) {
             exitEdge = leftEdge;
+            exitEdgeName = 'left';
             exitPoint = this.lineIntersection(entryPoint, { x: entryPoint.x + refractedDir.x * 2000, y: entryPoint.y + refractedDir.y * 2000 }, leftEdge.p1, leftEdge.p2);
             if (exitPoint && this.distance(exitPoint, entryPoint) < 5) exitPoint = null;
         }
@@ -372,7 +721,7 @@ export default class PrismCanvas {
             }
         }
 
-        return { origin: beamOrigin, entryPoint, entryTop, entryBottom, exitPoint, refractedDir, rainbowRays, exitEdge };
+        return { origin: beamOrigin, entryPoint, entryTop, entryBottom, exitPoint, refractedDir, rainbowRays, exitEdge, exitEdgeName };
     }
 
     drawIncomingBeam(beamPath) {
@@ -385,9 +734,10 @@ export default class PrismCanvas {
         const beamStart = { x: 0, y: beamY };
 
         const gradient = this.ctx.createLinearGradient(beamStart.x, beamStart.y, beamPath.entryPoint.x, beamPath.entryPoint.y);
-        gradient.addColorStop(0, 'rgba(255, 255, 255, 0.6)');
-        gradient.addColorStop(0.7, 'rgba(255, 255, 255, 0.9)');
-        gradient.addColorStop(1, 'rgba(255, 255, 255, 1)');
+        const bc = this._colors.beam;
+        gradient.addColorStop(0, `rgba(${bc.r}, ${bc.g}, ${bc.b}, ${bc.a * 0.6})`);
+        gradient.addColorStop(0.7, `rgba(${bc.r}, ${bc.g}, ${bc.b}, ${bc.a * 0.9})`);
+        gradient.addColorStop(1, `rgba(${bc.r}, ${bc.g}, ${bc.b}, ${bc.a})`);
 
         const perp = { x: -dir.y, y: dir.x };
         const entryEdgeDir = this.normalize({ x: this.prismCache.vertices[1].x - this.prismCache.vertices[0].x, y: this.prismCache.vertices[1].y - this.prismCache.vertices[0].y });
@@ -442,11 +792,32 @@ export default class PrismCanvas {
         this.ctx.closePath();
 
         const gradient = this.ctx.createLinearGradient(beamPath.entryPoint.x, beamPath.entryPoint.y, beamPath.exitPoint.x, beamPath.exitPoint.y);
-        gradient.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
-        gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.7)');
-        gradient.addColorStop(1, 'rgba(255, 255, 255, 0.3)');
+        const ibc = this._colors.beam;
+        gradient.addColorStop(0, `rgba(${ibc.r}, ${ibc.g}, ${ibc.b}, ${ibc.a * 0.95})`);
+        gradient.addColorStop(0.5, `rgba(${ibc.r}, ${ibc.g}, ${ibc.b}, ${ibc.a * 0.7})`);
+        gradient.addColorStop(1, `rgba(${ibc.r}, ${ibc.g}, ${ibc.b}, ${ibc.a * 0.3})`);
         this.ctx.fillStyle = gradient;
         this.ctx.fill();
+    }
+
+    _computeBandEdges(bandCount, hoveredIndex) {
+        const edges = new Array(bandCount + 1);
+        edges[0] = 0;
+        if (hoveredIndex < 0 || hoveredIndex >= bandCount || bandCount <= 1) {
+            for (let i = 1; i <= bandCount; i++) {
+                edges[i] = i / bandCount;
+            }
+        } else {
+            const hoveredWidth = 0.50;
+            const otherWidth = 0.50 / (bandCount - 1);
+            let cumulative = 0;
+            for (let i = 0; i < bandCount; i++) {
+                edges[i] = cumulative;
+                cumulative += (i === hoveredIndex) ? hoveredWidth : otherWidth;
+            }
+            edges[bandCount] = 1.0;
+        }
+        return edges;
     }
 
     drawStylizedRainbow(beamPath) {
@@ -459,10 +830,12 @@ export default class PrismCanvas {
         if (!centerRay) return;
         const uniformDirection = centerRay.direction;
         const exitMidpoint = { x: (bounds.clippedPt1.x + bounds.clippedPt2.x) / 2, y: (bounds.clippedPt1.y + bounds.clippedPt2.y) / 2 };
+        const bandEdges = this._computeBandEdges(bandCount, this.hoveredBandIndex);
 
         for (let i = 0; i < bandCount; i++) {
-            const t1 = i / bandCount, t2 = (i + 1) / bandCount;
-            const colorIndex1 = t1 * (this.ALBUM_COLORS.length - 1), colorIndex2 = t2 * (this.ALBUM_COLORS.length - 1);
+            const t1 = bandEdges[i], t2 = bandEdges[i + 1];
+            const uniformT1 = i / bandCount, uniformT2 = (i + 1) / bandCount;
+            const colorIndex1 = uniformT1 * (this.ALBUM_COLORS.length - 1), colorIndex2 = uniformT2 * (this.ALBUM_COLORS.length - 1);
             const color1 = this.interpolateColors(this.ALBUM_COLORS[Math.floor(colorIndex1)], this.ALBUM_COLORS[Math.ceil(colorIndex1)], colorIndex1 % 1);
             const color2 = this.interpolateColors(this.ALBUM_COLORS[Math.floor(colorIndex2)], this.ALBUM_COLORS[Math.ceil(colorIndex2)], colorIndex2 % 1);
 
@@ -505,10 +878,11 @@ export default class PrismCanvas {
         this.ctx.lineTo(vertices[2].x, vertices[2].y);
         this.ctx.closePath();
 
+        const pc = this._colors.prism;
         const gradient = this.ctx.createLinearGradient(vertices[0].x, vertices[0].y, this.prismCache.center.x, vertices[1].y);
-        gradient.addColorStop(0, 'rgba(25, 25, 35, 0.95)');
-        gradient.addColorStop(0.5, 'rgba(35, 35, 50, 0.9)');
-        gradient.addColorStop(1, 'rgba(20, 20, 30, 0.95)');
+        gradient.addColorStop(0, `rgba(${pc.r}, ${pc.g}, ${pc.b}, ${pc.a})`);
+        gradient.addColorStop(0.5, `rgba(${Math.min(255, pc.r + 10)}, ${Math.min(255, pc.g + 10)}, ${Math.min(255, pc.b + 15)}, ${pc.a * 0.95})`);
+        gradient.addColorStop(1, `rgba(${Math.max(0, pc.r - 5)}, ${Math.max(0, pc.g - 5)}, ${Math.max(0, pc.b - 5)}, ${pc.a})`);
         this.ctx.fillStyle = gradient;
         this.ctx.fill();
 
@@ -520,7 +894,7 @@ export default class PrismCanvas {
         this.ctx.lineTo(vertices[1].x, vertices[1].y);
         this.ctx.lineTo(vertices[2].x, vertices[2].y);
         this.ctx.closePath();
-        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+        this.ctx.strokeStyle = this._colors.prismBorder;
         this.ctx.lineWidth = 1;
         this.ctx.stroke();
     }
@@ -543,9 +917,10 @@ export default class PrismCanvas {
             this.ctx.lineTo(iv1.x, iv1.y);
             this.ctx.closePath();
             const midOuter = { x: (v1.x + v2.x) / 2, y: (v1.y + v2.y) / 2 }, midInner = { x: (iv1.x + iv2.x) / 2, y: (iv1.y + iv2.y) / 2 };
+            const fc = this._colors.prism;
             const gradient = this.ctx.createLinearGradient(midOuter.x, midOuter.y, midInner.x, midInner.y);
-            gradient.addColorStop(0, 'rgba(60, 60, 80, 0.3)');
-            gradient.addColorStop(1, 'rgba(60, 60, 80, 0)');
+            gradient.addColorStop(0, `rgba(${Math.min(255, fc.r + 35)}, ${Math.min(255, fc.g + 35)}, ${Math.min(255, fc.b + 45)}, 0.3)`);
+            gradient.addColorStop(1, `rgba(${Math.min(255, fc.r + 35)}, ${Math.min(255, fc.g + 35)}, ${Math.min(255, fc.b + 45)}, 0)`);
             this.ctx.fillStyle = gradient;
             this.ctx.fill();
         }
@@ -637,9 +1012,30 @@ export default class PrismCanvas {
 
         if (beamPath.rainbowRays.length < 2) return;
 
+        // Reset hover if not exiting from right edge
+        const hoverActive = this.cfg.hoverExpandEnabled && beamPath.exitEdgeName === 'right';
+        if (!hoverActive) {
+            this.hoveredBandIndex = -1;
+        }
+        this._lastExitEdgeName = beamPath.exitEdgeName;
+
         const bandCount = this.cfg.bandCount;
+
+        // Performance: Remove excess band elements and clear cache
+        if (this.bandElements.length > bandCount) {
+            for (let i = bandCount; i < this.bandElements.length; i++) {
+                if (this.bandElements[i]) {
+                    this.bandElements[i].remove();
+                }
+            }
+            this.bandElements.length = bandCount;
+            this.bandStateCache.length = bandCount;
+        }
+
+        // Always get fresh canvas rect for DOM shapes (scroll changes viewport position)
         const canvasRect = this.canvas.getBoundingClientRect();
         const bounds = this.getClippedExitBounds(beamPath);
+        const bandEdges = this._computeBandEdges(bandCount, hoverActive ? this.hoveredBandIndex : -1);
 
         const centerRayIndex = Math.floor(beamPath.rainbowRays.length / 2);
         const centerRay = beamPath.rainbowRays[centerRayIndex];
@@ -650,21 +1046,23 @@ export default class PrismCanvas {
             y: (bounds.clippedPt1.y + bounds.clippedPt2.y) / 2
         };
 
-        const existingBands = this.domRainbowContainer.querySelectorAll('.dom-rainbow-band');
+        const uniformDirection = centerRay.direction;
+        const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
+        const scrollY = window.pageYOffset || document.documentElement.scrollTop;
+        const docWidth = Math.max(document.documentElement.scrollWidth, window.innerWidth * 3);
+        const docHeight = Math.max(document.documentElement.scrollHeight, window.innerHeight * 3);
 
-        // Remove excess bands
-        if (existingBands.length > bandCount) {
-            for (let i = bandCount; i < existingBands.length; i++) {
-                existingBands[i].remove();
-            }
-        }
+        // Prepare batch updates
+        const updates = [];
 
         for (let i = 0; i < bandCount; i++) {
-            const t1 = i / bandCount;
-            const t2 = (i + 1) / bandCount;
+            const t1 = bandEdges[i];
+            const t2 = bandEdges[i + 1];
 
-            const colorIndex1 = t1 * (this.ALBUM_COLORS.length - 1);
-            const colorIndex2 = t2 * (this.ALBUM_COLORS.length - 1);
+            const uniformT1 = i / bandCount;
+            const uniformT2 = (i + 1) / bandCount;
+            const colorIndex1 = uniformT1 * (this.ALBUM_COLORS.length - 1);
+            const colorIndex2 = uniformT2 * (this.ALBUM_COLORS.length - 1);
 
             const color1 = this.interpolateColors(
                 this.ALBUM_COLORS[Math.floor(colorIndex1)],
@@ -680,16 +1078,16 @@ export default class PrismCanvas {
             const offset1 = (t1 - 0.5) * bounds.bandWidth;
             const offset2 = (t2 - 0.5) * bounds.bandWidth;
 
+            // Slight overlap (0.5px each side) to prevent subpixel gaps during CSS transition
+            const overlap = 0.5;
             const exitStart = {
-                x: exitMidpoint.x + bounds.exitEdgeDir.x * offset1,
-                y: exitMidpoint.y + bounds.exitEdgeDir.y * offset1
+                x: exitMidpoint.x + bounds.exitEdgeDir.x * (offset1 - overlap),
+                y: exitMidpoint.y + bounds.exitEdgeDir.y * (offset1 - overlap)
             };
             const exitEnd = {
-                x: exitMidpoint.x + bounds.exitEdgeDir.x * offset2,
-                y: exitMidpoint.y + bounds.exitEdgeDir.y * offset2
+                x: exitMidpoint.x + bounds.exitEdgeDir.x * (offset2 + overlap),
+                y: exitMidpoint.y + bounds.exitEdgeDir.y * (offset2 + overlap)
             };
-
-            const uniformDirection = centerRay.direction;
 
             // Calculate canvas endpoints
             const canvasRayLength = this.canvasWidth * 2;
@@ -705,53 +1103,250 @@ export default class PrismCanvas {
                 y: exitEnd.y + uniformDirection.y * canvasRayLength + bounds.exitEdgeDir.y * (spreadOffset2 - offset2) * canvasRayLength / 100
             };
 
-            // Extend rays to reach far beyond the canvas (container-relative)
-            const viewportEndStart = this.extendPointToContainerEdge(exitStart, canvasEndStart);
-            const viewportEndEnd = this.extendPointToContainerEdge(exitEnd, canvasEndEnd);
-
-            // Use canvas coordinates directly (container-relative, not viewport-relative)
-            const exitStartViewport = {
-                x: exitStart.x,
-                y: exitStart.y
+            // Convert canvas coordinates to document coordinates
+            const exitStartDoc = {
+                x: canvasRect.left + scrollX + exitStart.x,
+                y: canvasRect.top + scrollY + exitStart.y
             };
-            const exitEndViewport = {
-                x: exitEnd.x,
-                y: exitEnd.y
+            const exitEndDoc = {
+                x: canvasRect.left + scrollX + exitEnd.x,
+                y: canvasRect.top + scrollY + exitEnd.y
             };
 
-            // Create or update DOM element
-            let bandElement = existingBands[i];
+            // Extend rays to reach document edges
+            const viewportEndStart = this.extendPointToDocumentEdge(exitStartDoc, {
+                x: canvasRect.left + scrollX + canvasEndStart.x,
+                y: canvasRect.top + scrollY + canvasEndStart.y
+            });
+            const viewportEndEnd = this.extendPointToDocumentEdge(exitEndDoc, {
+                x: canvasRect.left + scrollX + canvasEndEnd.x,
+                y: canvasRect.top + scrollY + canvasEndEnd.y
+            });
+
+            // Get or create band element using cached reference
+            let bandElement = this.bandElements[i];
             if (!bandElement) {
                 bandElement = document.createElement('div');
                 bandElement.className = 'dom-rainbow-band';
+                bandElement.style.cssText = `
+                    position: absolute;
+                    will-change: clip-path;
+                    z-index: 99999;
+                `;
                 this.domRainbowContainer.appendChild(bandElement);
+                this.bandElements[i] = bandElement; // Cache the reference
             }
 
-            // Create trapezoid using clip-path
+            // Hover expand event binding (only set up once)
+            if (hoverActive) {
+                if (!bandElement.dataset.hoverBound) {
+                    bandElement.dataset.hoverBound = 'true';
+                    bandElement.dataset.bandIndex = i.toString();
+                    bandElement.addEventListener('mouseenter', (e) => {
+                        const idx = parseInt(e.currentTarget.dataset.bandIndex, 10);
+                        // Debounce hover state updates (16ms = 1 frame)
+                        this._debouncedHoverEnter(idx);
+                    });
+                    bandElement.addEventListener('mouseleave', () => {
+                        // Debounce hover state updates
+                        this._debouncedHoverLeave();
+                    });
+                }
+                // Only update these if needed
+                if (bandElement.style.pointerEvents !== 'auto') {
+                    bandElement.style.pointerEvents = 'auto';
+                    bandElement.style.cursor = 'pointer';
+                }
+            } else {
+                if (bandElement.style.pointerEvents !== 'none') {
+                    bandElement.style.pointerEvents = 'none';
+                    bandElement.style.cursor = '';
+                }
+            }
+
+            // Create trapezoid using clip-path with document coordinates
+            // Round values to reduce sub-pixel updates (toFixed(2) for precision)
             const points = [
-                `${exitStartViewport.x}px ${exitStartViewport.y}px`,
-                `${exitEndViewport.x}px ${exitEndViewport.y}px`,
-                `${viewportEndEnd.x}px ${viewportEndEnd.y}px`,
-                `${viewportEndStart.x}px ${viewportEndStart.y}px`
+                `${exitStartDoc.x.toFixed(2)}px ${exitStartDoc.y.toFixed(2)}px`,
+                `${exitEndDoc.x.toFixed(2)}px ${exitEndDoc.y.toFixed(2)}px`,
+                `${viewportEndEnd.x.toFixed(2)}px ${viewportEndEnd.y.toFixed(2)}px`,
+                `${viewportEndStart.x.toFixed(2)}px ${viewportEndStart.y.toFixed(2)}px`
             ].join(', ');
 
             // Apply gradient
             const gradientAngle = Math.atan2(
-                exitEndViewport.y - exitStartViewport.y,
-                exitEndViewport.x - exitStartViewport.x
+                exitEnd.y - exitStart.y,
+                exitEnd.x - exitStart.x
             ) * 180 / Math.PI + 90;
 
-            bandElement.style.background = `linear-gradient(${gradientAngle}deg, ${color1}, ${color2})`;
-            bandElement.style.clipPath = `polygon(${points})`;
-            bandElement.style.width = '100vw';
-            bandElement.style.height = '100vh';
-            bandElement.style.top = '0';
-            bandElement.style.left = '0';
-            bandElement.style.opacity = '1';
+            // Create state hash for change detection (rounded for threshold)
+            const stateKey = `${points}_${gradientAngle.toFixed(2)}_${this.hoveredBandIndex}_${hoverActive}`;
+
+            // Check if this band state has changed (with threshold)
+            const previousState = this.bandStateCache[i];
+            const stateChanged = previousState !== stateKey;
+
+            // Store update data for batched write
+            updates.push({
+                element: bandElement,
+                stateChanged,
+                stateKey,
+                index: i,
+                points,
+                gradientAngle,
+                color1,
+                color2,
+                docWidth,
+                docHeight,
+                hoverActive,
+                t1: bandEdges[i],
+                t2: bandEdges[i + 1],
+                bounds,
+                exitMidpoint,
+                uniformDirection,
+                canvasRect,
+                scrollX,
+                scrollY
+            });
+
         }
+
+        // Batch DOM updates using requestAnimationFrame (write phase)
+        this._applyBatchedDOMUpdates(updates, bandCount);
     }
 
-    extendPointToContainerEdge(startPoint, endPoint) {
+    _applyBatchedDOMUpdates(updates, bandCount) {
+        // Cancel any pending update
+        if (this.pendingDOMUpdates) {
+            cancelAnimationFrame(this.pendingDOMUpdates);
+        }
+
+        // Schedule batched write
+        this.pendingDOMUpdates = requestAnimationFrame(() => {
+            updates.forEach(update => {
+                const {
+                    element, stateChanged, stateKey, index, points, gradientAngle,
+                    color1, color2, docWidth, docHeight, hoverActive,
+                    t1, t2, bounds, exitMidpoint, uniformDirection,
+                    canvasRect, scrollX, scrollY
+                } = update;
+
+                // Only update DOM if state actually changed
+                if (stateChanged) {
+                    // Set transition BEFORE clip-path to ensure animation works
+                    if (this._isMouseOverRainbow && hoverActive) {
+                        // Transition active when hovering over rainbow
+                        element.style.transition = 'clip-path 0.3s ease';
+                        // Ripple effect: Set delay based on distance to hovered band
+                        if (this.hoveredBandIndex >= 0) {
+                            const distanceFromHovered = Math.abs(index - this.hoveredBandIndex);
+                            const delay = distanceFromHovered * 0.04; // 40ms per band distance
+                            element.style.transitionDelay = `${delay}s`;
+                        } else {
+                            element.style.transitionDelay = '0s';
+                        }
+                    } else {
+                        // No transition when not hovering (instant snap for beam movement)
+                        element.style.transition = 'none';
+                        element.style.transitionDelay = '0s';
+                    }
+
+                    // Use CSS custom properties internally, then apply to actual styles
+                    // This allows the browser to optimize better
+                    const gradient = `linear-gradient(${gradientAngle.toFixed(2)}deg, ${color1}, ${color2})`;
+                    const clipPath = `polygon(${points})`;
+                    const width = `${docWidth}px`;
+                    const height = `${docHeight}px`;
+                    const opacity = (this.cfg.domRainbowOpacity ?? 1).toString();
+
+                    // Set actual CSS properties (not custom properties)
+                    element.style.background = gradient;
+                    element.style.clipPath = clipPath;
+                    element.style.width = width;
+                    element.style.height = height;
+                    element.style.opacity = opacity;
+
+                    // Keep top/left as regular styles (they don't change)
+                    if (!element.dataset.positioned) {
+                        element.style.top = '0';
+                        element.style.left = '0';
+                        element.dataset.positioned = 'true';
+                    }
+
+                    // Update state cache
+                    this.bandStateCache[index] = stateKey;
+                }
+
+                // Band label rendering (less frequent updates)
+                const labelData = this.cfg.bandLabels && this.cfg.bandLabels[index];
+                if (labelData && labelData.text && uniformDirection.x > 0.01) {
+                    let labelEl = element.querySelector('.band-label');
+                    const needsAnchor = !!labelData.url;
+
+                    // Recreate if element type changed (span <-> a)
+                    if (labelEl && ((needsAnchor && labelEl.tagName !== 'A') || (!needsAnchor && labelEl.tagName === 'A'))) {
+                        labelEl.remove();
+                        labelEl = null;
+                    }
+                    if (!labelEl) {
+                        labelEl = document.createElement(needsAnchor ? 'a' : 'span');
+                        labelEl.className = 'band-label';
+                        element.appendChild(labelEl);
+                    }
+
+                    // Only update label if state changed
+                    if (stateChanged) {
+                        labelEl.textContent = labelData.text;
+                        if (needsAnchor) {
+                            const url = labelData.url;
+                            if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('/')) {
+                                labelEl.href = url;
+                            } else {
+                                labelEl.href = '#';
+                            }
+                            labelEl.target = '_blank';
+                            labelEl.rel = 'noopener noreferrer';
+                        }
+
+                        // Get band midpoint color
+                        const tMid = (index + 0.5) / bandCount;
+                        const colorIndexMid = tMid * (this.ALBUM_COLORS.length - 1);
+                        const bandColor = this.interpolateColors(
+                            this.ALBUM_COLORS[Math.floor(colorIndexMid)],
+                            this.ALBUM_COLORS[Math.ceil(colorIndexMid)],
+                            colorIndexMid % 1
+                        );
+                        labelEl.style.color = bandColor;
+
+                        // Position label where band midline crosses canvas right edge + offset
+                        const bandMidOffset = ((t1 + t2) / 2 - 0.5) * bounds.bandWidth;
+                        const bandMidExit = {
+                            x: exitMidpoint.x + bounds.exitEdgeDir.x * bandMidOffset,
+                            y: exitMidpoint.y + bounds.exitEdgeDir.y * bandMidOffset
+                        };
+                        const tToEdge = (this.canvasWidth - bandMidExit.x) / uniformDirection.x;
+                        const edgeCrossY = bandMidExit.y + uniformDirection.y * tToEdge;
+
+                        const labelDocX = canvasRect.right + scrollX + 15;
+                        const labelDocY = canvasRect.top + scrollY + edgeCrossY + (uniformDirection.y / uniformDirection.x) * 15;
+
+                        const angleDeg = Math.atan2(uniformDirection.y, uniformDirection.x) * 180 / Math.PI;
+                        labelEl.style.left = labelDocX.toFixed(2) + 'px';
+                        labelEl.style.top = labelDocY.toFixed(2) + 'px';
+                        labelEl.style.transform = `translate(0, -50%) rotate(${angleDeg.toFixed(2)}deg)`;
+                        labelEl.style.transformOrigin = 'left center';
+                    }
+                } else {
+                    const existingLabel = element.querySelector('.band-label');
+                    if (existingLabel) existingLabel.remove();
+                }
+            });
+
+            this.pendingDOMUpdates = null;
+        });
+    }
+
+    extendPointToDocumentEdge(startPoint, endPoint) {
         const dx = endPoint.x - startPoint.x;
         const dy = endPoint.y - startPoint.y;
         const len = Math.sqrt(dx * dx + dy * dy);
@@ -759,7 +1354,11 @@ export default class PrismCanvas {
 
         const dirX = dx / len;
         const dirY = dy / len;
-        const maxDistance = Math.max(window.innerWidth, window.innerHeight) * 5;
+
+        // Calculate distance to reach well beyond document edges
+        const docWidth = Math.max(document.documentElement.scrollWidth, window.innerWidth * 3);
+        const docHeight = Math.max(document.documentElement.scrollHeight, window.innerHeight * 3);
+        const maxDistance = Math.max(docWidth, docHeight) * 2;
 
         return {
             x: startPoint.x + dirX * maxDistance,
@@ -771,5 +1370,69 @@ export default class PrismCanvas {
         if (this.domRainbowContainer) {
             this.domRainbowContainer.innerHTML = '';
         }
+        this._isMouseOverRainbow = false;
+        this.bandElements = [];
+        this.bandStateCache = [];
+
+        // Cancel any pending updates
+        if (this.pendingDOMUpdates) {
+            cancelAnimationFrame(this.pendingDOMUpdates);
+            this.pendingDOMUpdates = null;
+        }
+
+        // Clear hover debounce timer
+        if (this.hoverDebounceTimer) {
+            clearTimeout(this.hoverDebounceTimer);
+            this.hoverDebounceTimer = null;
+        }
+
+        // #7: Clear pending mouse update
+        if (this.pendingMouseUpdate) {
+            clearTimeout(this.pendingMouseUpdate);
+            this.pendingMouseUpdate = null;
+        }
+    }
+
+    // Debounced hover enter (16ms = 1 frame @ 60fps)
+    _debouncedHoverEnter(idx) {
+        if (this.hoverDebounceTimer) {
+            clearTimeout(this.hoverDebounceTimer);
+        }
+
+        this.hoverDebounceTimer = setTimeout(() => {
+            this._isMouseOverRainbow = true;
+            this.hoveredBandIndex = idx;
+            // Use cached band elements instead of querySelectorAll
+            this.bandElements.forEach(band => {
+                if (band) band.classList.add('is-hovering');
+            });
+            this.needsRedraw = true;
+            this.hoverDebounceTimer = null;
+        }, 16); // 1 frame delay
+    }
+
+    // Debounced hover leave
+    _debouncedHoverLeave() {
+        if (this.hoverDebounceTimer) {
+            clearTimeout(this.hoverDebounceTimer);
+        }
+
+        this.hoverDebounceTimer = setTimeout(() => {
+            this.hoveredBandIndex = -1;
+            this.needsRedraw = true;
+
+            // Use cached band elements instead of querySelectorAll
+            this.bandElements.forEach(band => {
+                if (band) band.classList.remove('is-hovering');
+            });
+
+            // Wait for animation to complete (300ms) before disabling transition
+            setTimeout(() => {
+                this._isMouseOverRainbow = false;
+                this.needsRedraw = true;
+            }, 300);
+
+            this.hoverDebounceTimer = null;
+        }, 16); // 1 frame delay
     }
 }
