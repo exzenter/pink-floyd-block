@@ -57,7 +57,7 @@ export default function Edit({ attributes, setAttributes }) {
         refractionIndex, dispersion, rainbowAngle, beamWidth,
         beamExitMinY, beamExitMaxY, beamEntryMinY, beamEntryMaxY,
         innerBeamAngle, bandCount, rainbowSpread,
-        dampingEnabled, dampingFactor,
+        dampingEnabled, dampingFactor, disableInteractionBelow,
         boxedMode, aspectRatioEnabled, aspectRatio,
         boxWidth, boxWidthUnit, boxHeight, boxHeightUnit,
         minCanvasSize, boxBorderRadius, boxShadowEnabled,
@@ -95,7 +95,7 @@ export default function Edit({ attributes, setAttributes }) {
             refractionIndex: 1.44, dispersion: 0.11, rainbowAngle: 48, beamWidth: 13,
             beamExitMinY: 0, beamExitMaxY: 100, beamEntryMinY: 0, beamEntryMaxY: 100,
             innerBeamAngle: -78, bandCount: 7, rainbowSpread: 2.0,
-            dampingEnabled: true, dampingFactor: 0.30,
+            dampingEnabled: true, dampingFactor: 0.30, disableInteractionBelow: 0,
             boxedMode: false, aspectRatioEnabled: false, aspectRatio: '16:9',
             boxWidth: 900, boxWidthUnit: 'px', boxHeight: 600, boxHeightUnit: 'px',
             targetFPS: 60, antiAliasing: true, showFPS: false,
@@ -162,6 +162,18 @@ export default function Edit({ attributes, setAttributes }) {
                 <PanelBody title={__('Interaction Settings', 'pinkfloyd-block')} initialOpen={false}>
                     <ToggleControl label={__('Enable Damping', 'pinkfloyd-block')} checked={dampingEnabled} onChange={(v) => setAttributes({ dampingEnabled: v })} />
                     <RangeControl label={__('Damping Factor', 'pinkfloyd-block')} value={dampingFactor} onChange={(v) => setAttributes({ dampingFactor: v })} min={0.01} max={0.3} step={0.01} />
+                    <RangeControl
+                        label={__('Disable Interaction Below (px)', 'pinkfloyd-block')}
+                        value={disableInteractionBelow}
+                        onChange={(v) => setAttributes({ disableInteractionBelow: v })}
+                        min={0}
+                        max={1920}
+                        step={1}
+                        help={disableInteractionBelow > 0
+                            ? __(`Animation won't follow cursor/touch below ${disableInteractionBelow}px viewport width.`, 'pinkfloyd-block')
+                            : __('Set to 0 to always allow interaction.', 'pinkfloyd-block')
+                        }
+                    />
                 </PanelBody>
 
                 <PanelBody title={__('Display Settings', 'pinkfloyd-block')} initialOpen={false}>

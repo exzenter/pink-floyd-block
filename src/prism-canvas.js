@@ -398,9 +398,15 @@ export default class PrismCanvas {
         this.grainCtx.putImageData(imageData, 0, 0);
     }
 
+    isInteractionDisabled() {
+        const breakpoint = this.cfg.disableInteractionBelow || 0;
+        return breakpoint > 0 && window.innerWidth < breakpoint;
+    }
+
     setupEventListeners() {
         // #7: Throttled mouse movement handler
         const handleMove = (e) => {
+            if (this.isInteractionDisabled()) return;
             const rect = this.canvas.getBoundingClientRect();
             let x, y;
             if (e.touches && e.touches.length > 0) {
@@ -417,21 +423,25 @@ export default class PrismCanvas {
         this.canvas.addEventListener('touchmove', handleMove, { passive: true });
 
         this.canvas.addEventListener('mouseenter', () => {
+            if (this.isInteractionDisabled()) return;
             this.mouse.isOnCanvas = true;
             this.dirtyFlags.beam = true;
             this.needsRedraw = true;
         });
         this.canvas.addEventListener('mouseleave', () => {
+            if (this.isInteractionDisabled()) return;
             this.mouse.isOnCanvas = false;
             this.dirtyFlags.beam = true;
             this.needsRedraw = true;
         });
         this.canvas.addEventListener('touchstart', () => {
+            if (this.isInteractionDisabled()) return;
             this.mouse.isOnCanvas = true;
             this.dirtyFlags.beam = true;
             this.needsRedraw = true;
         });
         this.canvas.addEventListener('touchend', () => {
+            if (this.isInteractionDisabled()) return;
             this.mouse.isOnCanvas = false;
             this.dirtyFlags.beam = true;
             this.needsRedraw = true;
@@ -441,6 +451,15 @@ export default class PrismCanvas {
             if (!this.cfg.boxedMode) {
                 this.canvasRectDirty = true; // Mark canvas rect for update
                 this.setupCanvas();
+            }
+            // Reset to default beam position when viewport falls below breakpoint
+            if (this.isInteractionDisabled()) {
+                this.mouse.isOnCanvas = false;
+                this.mouse.targetX = this.defaultBeamOrigin.x;
+                this.mouse.targetY = this.defaultBeamOrigin.y;
+                this.dirtyFlags.beam = true;
+                this.dirtyFlags.rainbow = true;
+                this.needsRedraw = true;
             }
         }, 100));
 

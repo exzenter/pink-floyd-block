@@ -108,6 +108,10 @@
             "type": "number",
             "default": 0.30
         },
+        "disableInteractionBelow": {
+            "type": "number",
+            "default": 0
+        },
         "boxedMode": {
             "type": "boolean",
             "default": false
