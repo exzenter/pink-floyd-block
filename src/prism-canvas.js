@@ -160,6 +160,13 @@ export default class PrismCanvas {
   }
 
   setupDOMRainbowContainer() {
+    // On mobile touch devices, skip creating body-level DOM rainbow container
+    // to prevent any possibility of page overflow
+    if (this._isMobileTouchDevice()) {
+      this.domRainbowContainer = null;
+      return;
+    }
+
     // Remove any existing body-level container for this canvas
     if (
       this.domRainbowContainer &&
@@ -201,6 +208,20 @@ export default class PrismCanvas {
       style.textContent = "html { overflow-x: clip; }";
       document.head.appendChild(style);
     }
+  }
+
+  /**
+   * Detect if the current device is a touch-only mobile device.
+   * Used to prevent DOM rainbow rays from extending beyond the canvas
+   * which causes page width overflow on mobile browsers.
+   */
+  _isMobileTouchDevice() {
+    return (
+      "ontouchstart" in window &&
+      /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(
+        navigator.userAgent,
+      )
+    );
   }
 
   updateConfig(newConfig) {
@@ -684,8 +705,12 @@ export default class PrismCanvas {
         this.drawIncomingBeam(beamPath);
         this.drawInnerBeam(beamPath);
 
-        // Draw rainbow if not hidden
-        if (!this.cfg.hideCanvasRainbow || !this.cfg.domRainbowShapes) {
+        // Draw rainbow if not hidden (always draw on mobile touch since DOM shapes are disabled)
+        if (
+          !this.cfg.hideCanvasRainbow ||
+          !this.cfg.domRainbowShapes ||
+          this._isMobileTouchDevice()
+        ) {
           this.drawStylizedRainbow(beamPath);
         }
 
@@ -1097,6 +1122,16 @@ export default class PrismCanvas {
     };
     const bandEdges = this._computeBandEdges(bandCount, this.hoveredBandIndex);
 
+    // On mobile touch devices, clip rainbow rays to canvas bounds
+    // to prevent page overflow / zoom issues
+    const clipToCanvas = this._isMobileTouchDevice();
+    if (clipToCanvas) {
+      this.ctx.save();
+      this.ctx.beginPath();
+      this.ctx.rect(0, 0, this.canvasWidth, this.canvasHeight);
+      this.ctx.clip();
+    }
+
     for (let i = 0; i < bandCount; i++) {
       const t1 = bandEdges[i],
         t2 = bandEdges[i + 1];
@@ -1166,6 +1201,10 @@ export default class PrismCanvas {
       gradient.addColorStop(1, color2);
       this.ctx.fillStyle = gradient;
       this.ctx.fill();
+    }
+
+    if (clipToCanvas) {
+      this.ctx.restore();
     }
   }
 
@@ -1457,6 +1496,13 @@ export default class PrismCanvas {
       !this.domRainbowContainer ||
       !beamPath
     ) {
+      return;
+    }
+
+    // On mobile touch devices, skip DOM rainbow shapes entirely
+    // to prevent page width overflow and unwanted zoom/scroll
+    if (this._isMobileTouchDevice()) {
+      this.clearDOMRainbowShapes();
       return;
     }
 
